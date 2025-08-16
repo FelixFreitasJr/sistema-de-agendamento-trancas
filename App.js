@@ -1,0 +1,1322 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Home,
+  Calendar,
+  User,
+  LayoutDashboard,
+  GalleryVerticalEnd,
+  ChevronLeft,
+  ChevronRight,
+  Scissors,
+  UserRound,
+  Smartphone,
+  CheckCheck,
+  Ban,
+  MessageCircle,
+  Image as ImageIcon,
+  Link,
+  Trash2,
+  Lock,
+  Settings,
+  Package,
+  Boxes,
+  Store,
+  Wallet,
+  AreaChart,
+  Edit2,
+  Clock,
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from 'firebase/firestore';
+
+// Componente principal do aplicativo
+const App = () => {
+  // Estado para a página atual, autenticação do usuário e dados do Firebase
+  const [currentPage, setCurrentPage] = useState('Home'); // Mudado para começar na Home
+  const [user, setUser] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  
+  // Dados do Firestore
+  const [estabelecimentoName, setEstabelecimentoName] = useState('Tranças.');
+  const [logoUrl, setLogoUrl] = useState('https://placehold.co/150x50/F4B6C2/521634?text=Trancas');
+  const [hourlyRate, setHourlyRate] = useState(50.00);
+  const [products, setProducts] = useState([]);
+  const [stock, setStock] = useState([]);
+  const [appointments, setAppointments] = useState([]);
+  
+  const [messageBox, setMessageBox] = useState({ visible: false, message: '' });
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+
+  // Mapeamento de tamanhos de cabelo desejados e seus acréscimos de preço
+  const desiredLengths = [
+    { name: 'Curto (Chanel)', value: 'curto', priceAddOn: 20.00 },
+    { name: 'Médio (Ombro)', value: 'medio', priceAddOn: 40.00 },
+    { name: 'Grande (Costas)', value: 'grande', priceAddOn: 60.00 },
+    { name: 'Extra Grande (Bunda)', value: 'extra-grande', priceAddOn: 80.00 },
+  ];
+
+  // Função para configurar dados iniciais de exemplo
+  const setupInitialData = async (firestore, userId) => {
+    const productsCollection = collection(firestore, `artifacts/${__app_id}/users/${userId}/products`);
+    const stockCollection = collection(firestore, `artifacts/${__app_id}/users/${userId}/stock`);
+    const configDocRef = doc(firestore, `artifacts/${__app_id}/public/data/app-config/main`);
+
+    // Verifica se os dados de configuração já existem e adiciona a taxa horária se necessário
+    const configDoc = await getDoc(configDocRef);
+    if (!configDoc.exists()) {
+        console.log("Criando dados de configuração iniciais...");
+        await setDoc(configDocRef, {
+            name: 'Tranças.',
+            logoUrl: 'https://placehold.co/150x50/F4B6C2/521634?text=Trancas',
+            hourlyRate: 50.00
+        });
+    }
+
+    // Verifica se os dados de estoque já existem
+    const stockDocs = await getDocs(stockCollection);
+    if (stockDocs.empty) {
+        console.log("Criando dados de estoque iniciais...");
+        await setDoc(doc(stockCollection, "jumbo-hair"), {
+            name: 'Cabelo Jumbo',
+            quantity: 50,
+            unitValue: 15.00,
+            unit: 'unidade',
+            supplier: 'Fornecedor A'
+        });
+        await setDoc(doc(stockCollection, "trancas-finas"), {
+            name: 'Linha para Tranças Finas',
+            quantity: 200,
+            unitValue: 0.50,
+            unit: 'metro',
+            supplier: 'Fornecedor B'
+        });
+        await setDoc(doc(stockCollection, "gel-fixador"), {
+            name: 'Gel Fixador',
+            quantity: 5,
+            unitValue: 35.00,
+            unit: 'kg',
+            supplier: 'Fornecedor C'
+        });
+    }
+
+    // Verifica se os dados de produtos já existem
+    const productsDocs = await getDocs(productsCollection);
+    if (productsDocs.empty) {
+        console.log("Criando dados de produtos iniciais...");
+        await setDoc(doc(productsCollection, "box-braids"), {
+            name: 'Tranças Box Braids',
+            description: 'Tranças clássicas e duradouras.',
+            imageUrl: 'https://placehold.co/400x300/e9d5ff/8B5CF6?text=Box+Braids',
+            basePrice: 50.00,
+            profitMargin: 50,
+            averageTime: 4,
+            isCommercialized: true,
+            materials: [
+                { stockId: "jumbo-hair", name: "Cabelo Jumbo", quantityUsed: 2, unitValue: 15.00 },
+                { stockId: "gel-fixador", name: "Gel Fixador", quantityUsed: 0.1, unitValue: 35.00 }
+            ]
+        });
+        await setDoc(doc(productsCollection, "twist-braids"), {
+            name: 'Twist Braids',
+            description: 'Tranças em formato de torção, com estilo único.',
+            imageUrl: 'https://placehold.co/400x300/fecaca/DC2626?text=Twist+Braids',
+            basePrice: 60.00,
+            profitMargin: 60,
+            averageTime: 3,
+            isCommercialized: true,
+            materials: [
+                { stockId: "jumbo-hair", name: "Cabelo Jumbo", quantityUsed: 3, unitValue: 15.00 },
+                { stockId: "gel-fixador", name: "Gel Fixador", quantityUsed: 0.2, unitValue: 35.00 }
+            ]
+        });
+    }
+};
+
+  // Configuração e autenticação do Firebase
+  useEffect(() => {
+    const initFirebase = async () => {
+      try {
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const app = initializeApp(firebaseConfig);
+        const firestore = getFirestore(app);
+        const authInstance = getAuth(app);
+        
+        setDb(firestore);
+        setAuth(authInstance);
+
+        const unsubscribe = onAuthStateChanged(authInstance, async (authUser) => {
+          if (authUser) {
+            setUser({ id: authUser.uid, role: authUser.uid === 'admin-id' ? 'admin' : 'client' });
+            await setupInitialData(firestore, authUser.uid);
+          } else {
+            setUser(null);
+          }
+          setIsAuthReady(true);
+        });
+
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        if (initialAuthToken) {
+          await signInWithCustomToken(authInstance, initialAuthToken);
+        } else {
+          await signInAnonymously(authInstance);
+        }
+
+        return () => unsubscribe();
+      } catch (error) {
+        console.error("Firebase initialization failed:", error);
+      }
+    };
+    initFirebase();
+  }, []);
+
+  // Listeners de dados do Firestore em tempo real
+  useEffect(() => {
+    if (db && isAuthReady && auth.currentUser) {
+      const userId = auth.currentUser.uid;
+      // Listener para a configuração do aplicativo (nome, logo e taxa horária)
+      const configDocRef = doc(db, `artifacts/${__app_id}/public/data/app-config/main`);
+      const unsubscribeConfig = onSnapshot(configDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setEstabelecimentoName(data.name || 'Tranças.');
+          setLogoUrl(data.logoUrl || 'https://placehold.co/150x50/F4B6C2/521634?text=Trancas');
+          setHourlyRate(data.hourlyRate || 50.00);
+        }
+      }, (error) => console.error("Error fetching config:", error));
+
+      // Listener para produtos
+      const productsColRef = collection(db, `artifacts/${__app_id}/users/${userId}/products`);
+      const unsubscribeProducts = onSnapshot(productsColRef, (snapshot) => {
+        const productsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setProducts(productsData);
+      }, (error) => console.error("Error fetching products:", error));
+
+      // Listener para estoque
+      const stockColRef = collection(db, `artifacts/${__app_id}/users/${userId}/stock`);
+      const unsubscribeStock = onSnapshot(stockColRef, (snapshot) => {
+        const stockData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setStock(stockData);
+      }, (error) => console.error("Error fetching stock:", error));
+
+      // Listener para agendamentos (apenas para o admin)
+      let unsubscribeAppointments;
+      if (user?.role === 'admin') {
+         const appointmentsColRef = collection(db, `artifacts/${__app_id}/users/${userId}/appointments`);
+         unsubscribeAppointments = onSnapshot(appointmentsColRef, (snapshot) => {
+           const appointmentsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+           setAppointments(appointmentsData);
+         }, (error) => console.error("Error fetching appointments:", error));
+      }
+      
+      return () => {
+        unsubscribeConfig();
+        unsubscribeProducts();
+        unsubscribeStock();
+        if (unsubscribeAppointments) {
+          unsubscribeAppointments();
+        }
+      };
+    }
+  }, [db, isAuthReady, user]);
+
+  // Função para exibir a caixa de mensagem
+  const showMessageBox = (message) => {
+    setMessageBox({ visible: true, message });
+  };
+
+  // Função para esconder a caixa de mensagem
+  const hideMessageBox = () => {
+    setMessageBox({ visible: false, message: '' });
+  };
+
+  // Função para navegar entre as páginas
+  const navigate = (page) => {
+    setCurrentPage(page);
+  };
+  
+  // Login e Logout
+  const handleLogin = (role, password = '') => {
+    if (role === 'admin' && password === 'admin') {
+      setUser({ id: auth.currentUser.uid, role: 'admin' });
+      navigate('AdminDashboard');
+    } else {
+      showMessageBox('Senha incorreta. Por favor, tente novamente.');
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    navigate('Login');
+  };
+
+  // Estilos para os status de agendamento
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'Pendente': return 'bg-yellow-100 text-yellow-800';
+      case 'Confirmado': return 'bg-green-100 text-green-800';
+      case 'Em andamento': return 'bg-blue-100 text-blue-800';
+      case 'Concluído': return 'bg-zinc-100 text-zinc-800';
+      case 'Cancelado': return 'bg-red-100 text-red-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  // Componente de navegação
+  const Nav = () => (
+    <nav className="fixed bottom-0 left-0 right-0 bg-white shadow-lg z-50 md:top-0 md:h-full md:w-64 md:border-r md:shadow-none md:flex-shrink-0 md:flex md:flex-col md:justify-start md:items-start md:px-4 md:py-8">
+      <div className="md:flex md:flex-col md:items-center md:mb-8 w-full hidden">
+        <h1 className="text-2xl font-bold text-pink-600 mb-2">{estabelecimentoName}</h1>
+      </div>
+      <ul className="flex justify-around items-center w-full md:flex-col md:items-start md:justify-start md:space-y-4">
+        <NavItem icon={Home} label="Página Inicial" page="Home" active={currentPage === 'Home'} onClick={() => navigate('Home')} />
+        <NavItem icon={Calendar} label="Agendar" page="Appointment" active={currentPage === 'Appointment'} onClick={() => navigate('Appointment')} />
+        <NavItem icon={Store} label="Serviços" page="ClientProducts" active={currentPage === 'ClientProducts'} onClick={() => navigate('ClientProducts')} />
+      </ul>
+      <div className="fixed top-4 right-4 md:static md:mt-8 w-full flex justify-end md:justify-center">
+        {user?.role === 'admin' ? (
+          <button
+            onClick={handleLogout}
+            className="bg-zinc-200 text-sm font-semibold text-zinc-700 px-4 py-2 rounded-full shadow-lg transition-colors duration-200 hover:bg-zinc-300"
+          >
+            Sair
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate('Login')}
+            className="bg-zinc-200 text-sm font-semibold text-zinc-700 px-4 py-2 rounded-full shadow-lg transition-colors duration-200 hover:bg-zinc-300"
+          >
+            <Lock className="w-4 h-4 mr-2 inline-block" /> Login Admin
+          </button>
+        )}
+      </div>
+    </nav>
+  );
+
+  // Item de navegação
+  const NavItem = ({ icon: Icon, label, active, onClick }) => (
+    <li className="w-1/5 md:w-full md:mb-2">
+      <button
+        onClick={onClick}
+        className={`flex flex-col items-center justify-center p-2 rounded-lg transition-colors duration-200 w-full md:flex-row md:justify-start md:px-4 md:py-3 md:space-x-4
+          ${active ? 'text-pink-600 bg-pink-50' : 'text-gray-500 hover:text-pink-600 hover:bg-pink-50'}`}
+      >
+        <Icon className="w-6 h-6 mb-1 md:mb-0" />
+        <span className="text-xs font-medium md:text-sm">{label}</span>
+      </button>
+    </li>
+  );
+
+  // Componente de botão de voltar
+  const BackButton = ({ onClick }) => (
+    <button
+      onClick={onClick}
+      className="flex items-center text-gray-500 hover:text-gray-700 transition-colors mb-4"
+    >
+      <ChevronLeft className="w-5 h-5 mr-1" />
+      Voltar
+    </button>
+  );
+
+  // Container de página
+  const PageContainer = ({ children }) => (
+    <div className="bg-zinc-50 min-h-screen pb-20 pt-8 px-4 md:pl-72 md:pb-8 md:pt-16">
+      <div className="max-w-4xl mx-auto">
+        {children}
+      </div>
+    </div>
+  );
+
+  // Tela de Login (apenas para o admin)
+  const LoginScreen = () => {
+    const [password, setPassword] = useState('');
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-4">
+        <div className="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full text-center">
+          <button onClick={() => navigate('Home')} className="flex items-center justify-center mb-6 text-gray-500 hover:text-gray-700">
+            <ChevronLeft className="w-5 h-5 mr-1" /> Voltar para a Home
+          </button>
+          <h1 className="text-3xl font-extrabold text-pink-600 mb-2">{estabelecimentoName}</h1>
+          <p className="text-gray-500 mb-8">Acesso restrito para Administrador</p>
+          <div className="space-y-6">
+            <h2 className="text-xl font-bold text-gray-800">Acesse sua conta</h2>
+            <div>
+              <label htmlFor="password" className="sr-only">Senha do Administrador</label>
+              <input
+                type="password"
+                id="password"
+                placeholder="Senha do Administrador"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors p-3"
+              />
+            </div>
+            <button
+              onClick={() => handleLogin('admin', password)}
+              className="bg-pink-600 text-white font-semibold w-full py-3 rounded-full shadow-lg transition-transform duration-300 transform hover:scale-105"
+            >
+              Entrar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Página Inicial
+  const HomeSection = () => (
+    <PageContainer>
+      <div className="text-center py-16 px-4">
+        <h1 className="text-4xl font-extrabold text-pink-600 mb-4">Bem-vindo(a) ao {estabelecimentoName}</h1>
+        <p className="text-lg text-gray-600 mb-8">
+          Sua jornada para um cabelo incrível começa aqui. Agende seu serviço de tranças de forma fácil e rápida!
+        </p>
+        <div className="relative overflow-hidden w-full h-80 rounded-3xl shadow-xl mb-12">
+          <img
+            src="https://placehold.co/800x600/F4B6C2/FFFFFF?text=Trancas"
+            alt="Penteados de Tranças"
+            className="w-full h-full object-cover"
+          />
+        </div>
+        <button
+          onClick={() => navigate('Appointment')}
+          className="bg-pink-600 text-white font-semibold py-3 px-8 rounded-full shadow-lg transition-transform duration-300 transform hover:scale-105"
+        >
+          Agendar Agora
+        </button>
+      </div>
+    </PageContainer>
+  );
+
+  // Helper para calcular o preço do produto com base nos materiais, tempo e margem de lucro
+  const calculateProductPrice = (product) => {
+    if (!product) return 0;
+    const materialCost = (product.materials || []).reduce((total, mat) => {
+      const stockItem = stock.find(item => item.id === mat.stockId);
+      return total + (stockItem ? stockItem.unitValue * mat.quantityUsed : 0);
+    }, 0);
+    const timeCost = (product.averageTime || 0) * (hourlyRate || 0);
+    const totalCost = (product.basePrice || 0) + materialCost + timeCost;
+    return totalCost + (totalCost * (product.profitMargin / 100));
+  };
+  
+  // Formulário de Agendamento (para clientes)
+  const AppointmentForm = () => {
+    const [step, setStep] = useState(1);
+    const [formData, setFormData] = useState({
+      fullName: '',
+      whatsapp: '',
+      currentHairLength: '', // Novo estado para tamanho atual
+      selectedDesiredLength: null, // Novo estado para tamanho desejado
+      selectedDayType: 'weekday',
+      selectedShift: 'morning',
+    });
+    const [selectedProduct, setSelectedProduct] = useState(null);
+
+    const handleInputChange = (e) => {
+      const { name, value } = e.target;
+      setFormData({ ...formData, [name]: value });
+    };
+
+    const handleProductSelect = (product) => {
+      setSelectedProduct(product);
+      setStep(2);
+    };
+    
+    const handleNextStep = () => {
+      if (step === 1 && !selectedProduct) {
+        showMessageBox('Por favor, selecione um tipo de trança.');
+        return;
+      }
+      if (step === 2 && (!formData.currentHairLength || !formData.selectedDesiredLength)) {
+        showMessageBox('Por favor, preencha o tamanho do cabelo atual e o desejado.');
+        return;
+      }
+      if (step === 3 && (!formData.fullName || formData.fullName.split(' ').length < 2 || !formData.whatsapp)) {
+        showMessageBox('Por favor, preencha seu nome e WhatsApp corretamente.');
+        return;
+      }
+      setStep(step + 1);
+    };
+
+    const handlePreviousStep = () => {
+      setStep(step - 1);
+    };
+
+    const calculateFinalPrice = () => {
+        if (!selectedProduct) return 0;
+        let finalPrice = calculateProductPrice(selectedProduct);
+        
+        // Adiciona o acréscimo do tamanho desejado
+        const desiredLengthPrice = desiredLengths.find(l => l.value === formData.selectedDesiredLength)?.priceAddOn || 0;
+        finalPrice += desiredLengthPrice;
+
+        // Adiciona o acréscimo de fim de semana
+        if (formData.selectedDayType === 'weekend') {
+            finalPrice *= 1.10; // 10% de acréscimo
+        }
+        
+        return finalPrice;
+    };
+
+    const handleSubmit = async (e) => {
+      e.preventDefault();
+      if (!db || !auth.currentUser) {
+        showMessageBox('Erro: O banco de dados não está pronto.');
+        return;
+      }
+
+      const finalPrice = calculateFinalPrice();
+      const newAppointment = {
+        name: formData.fullName,
+        whatsapp: formData.whatsapp,
+        braidType: selectedProduct.name,
+        braidPrice: finalPrice,
+        estimatedTime: selectedProduct.averageTime,
+        currentHairLength: formData.currentHairLength,
+        desiredHairLength: formData.selectedDesiredLength,
+        dayType: formData.selectedDayType,
+        shift: formData.selectedShift,
+        status: 'Pendente',
+        requestDate: new Date().toLocaleDateString('pt-BR'),
+        requestTime: new Date().toLocaleTimeString('pt-BR'),
+      };
+      
+      try {
+        const appointmentsColRef = collection(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/appointments`);
+        await addDoc(appointmentsColRef, newAppointment);
+        showMessageBox('Pré-agendamento enviado com sucesso! Aguarde a trancista entrar em contato para confirmar.');
+        
+        const whatsappUrl = `https://api.whatsapp.com/send?phone=5521912345678&text=${encodeURIComponent('Olá, agendei um serviço de tranças.')}`;
+        window.open(whatsappUrl, '_blank');
+
+        setStep(1);
+        setFormData({ fullName: '', whatsapp: '', currentHairLength: '', selectedDesiredLength: null, selectedDayType: 'weekday', selectedShift: 'morning' });
+        setSelectedProduct(null);
+        navigate('Home');
+      } catch (error) {
+        console.error("Error adding appointment:", error);
+        showMessageBox('Ocorreu um erro ao agendar. Tente novamente.');
+      }
+    };
+    
+    const commercializedProducts = products.filter(p => p.isCommercialized);
+
+    const renderStepContent = () => {
+      switch (step) {
+        case 1:
+          return (
+            <div className="space-y-6">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Escolha seu Serviço</h3>
+              <p className="text-gray-500 mb-6">Selecione o tipo de trança que você deseja agendar.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {commercializedProducts.map(product => (
+                  <button
+                    key={product.id}
+                    onClick={() => handleProductSelect(product)}
+                    className={`p-4 rounded-xl shadow-md border-2 transition-all duration-300 text-left
+                                ${selectedProduct?.id === product.id ? 'border-pink-600 bg-pink-50' : 'border-gray-200 bg-white hover:border-pink-600'}`}
+                  >
+                    <div className="flex items-center space-x-4">
+                      <img src={product.imageUrl} alt={product.name} className="w-20 h-20 object-cover rounded-lg" />
+                      <div>
+                        <h4 className="font-bold text-gray-800">{product.name}</h4>
+                        <p className="text-sm text-gray-600">{product.description}</p>
+                        <p className="font-extrabold text-pink-600 mt-1">R$ {calculateProductPrice(product).toFixed(2)}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        case 2:
+          return (
+            <div className="space-y-6">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Tamanhos</h3>
+              <p className="text-gray-500 mb-6">Informe o tamanho do seu cabelo atual e qual o tamanho que você deseja.</p>
+              <div>
+                <label htmlFor="currentHairLength" className="block text-sm font-medium text-gray-700">Tamanho atual do seu cabelo</label>
+                <input
+                  type="text"
+                  id="currentHairLength"
+                  name="currentHairLength"
+                  placeholder="Ex: Altura do ombro, 10cm, etc."
+                  value={formData.currentHairLength}
+                  onChange={handleInputChange}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Tamanho desejado</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {desiredLengths.map(length => (
+                    <label key={length.value} className="flex items-center space-x-2 bg-zinc-50 p-4 rounded-xl border border-gray-200 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedDesiredLength"
+                        value={length.value}
+                        checked={formData.selectedDesiredLength === length.value}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      <span>{length.name}</span>
+                      <span className="font-semibold text-sm text-gray-600 ml-auto">+ R$ {length.priceAddOn.toFixed(2)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        case 3:
+          return (
+            <div className="space-y-6">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Seus dados e Preferências</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="fullName" className="block text-sm font-medium text-gray-700">Nome completo</label>
+                  <input
+                    type="text"
+                    id="fullName"
+                    name="fullName"
+                    value={formData.fullName}
+                    onChange={handleInputChange}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="whatsapp" className="block text-sm font-medium text-gray-700">WhatsApp</label>
+                  <input
+                    type="tel"
+                    id="whatsapp"
+                    name="whatsapp"
+                    placeholder="XX XXXXX-XXXX"
+                    value={formData.whatsapp}
+                    onChange={handleInputChange}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+                  />
+                </div>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Tipo de Dia</label>
+                  <div className="mt-2 flex space-x-4">
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedDayType"
+                        value="weekday"
+                        checked={formData.selectedDayType === 'weekday'}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      Dia de Semana
+                    </label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedDayType"
+                        value="weekend"
+                        checked={formData.selectedDayType === 'weekend'}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      Fim de Semana (+10%)
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Turno</label>
+                  <div className="mt-2 flex space-x-4">
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedShift"
+                        value="morning"
+                        checked={formData.selectedShift === 'morning'}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      Manhã
+                    </label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedShift"
+                        value="afternoon"
+                        checked={formData.selectedShift === 'afternoon'}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      Tarde
+                    </label>
+                    <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="selectedShift"
+                        value="evening"
+                        checked={formData.selectedShift === 'evening'}
+                        onChange={handleInputChange}
+                        className="rounded-full text-pink-600 focus:ring-pink-500"
+                      />
+                      Noite
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        case 4:
+          const dayTypeLabel = formData.selectedDayType === 'weekday' ? 'Dia de Semana' : 'Fim de Semana';
+          const shiftLabel = formData.selectedShift === 'morning' ? 'Manhã' : formData.selectedShift === 'afternoon' ? 'Tarde' : 'Noite';
+          const finalPrice = calculateFinalPrice();
+
+          return (
+            <div className="space-y-6">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">Resumo e Confirmação</h3>
+              <div className="bg-zinc-100 p-6 rounded-2xl border border-pink-100 space-y-4">
+                <h4 className="font-bold text-lg text-pink-600">Seu Pré-agendamento</h4>
+                <div className="flex items-center space-x-4">
+                  <img src={selectedProduct.imageUrl} alt={selectedProduct.name} className="w-24 h-24 object-cover rounded-xl shadow-md" />
+                  <div>
+                    <p className="text-base text-gray-700 font-semibold">{selectedProduct.name}</p>
+                    <p className="text-sm text-gray-500">{selectedProduct.description}</p>
+                  </div>
+                </div>
+                <div className="border-t border-dashed border-gray-300 pt-4">
+                  <p className="font-bold text-lg text-gray-800">Detalhes:</p>
+                  <ul className="text-sm text-gray-600 space-y-1">
+                    <li>- Nome: {formData.fullName}</li>
+                    <li>- WhatsApp: {formData.whatsapp}</li>
+                    <li>- Tamanho Atual: {formData.currentHairLength}</li>
+                    <li>- Tamanho Desejado: {desiredLengths.find(l => l.value === formData.selectedDesiredLength)?.name}</li>
+                    <li>- Preferência: {dayTypeLabel} ({shiftLabel})</li>
+                    <li className="flex items-center space-x-1 mt-2">
+                        <Clock className="w-4 h-4 text-gray-500" />
+                        <span>Tempo Estimado: {selectedProduct.averageTime} horas</span>
+                    </li>
+                  </ul>
+                </div>
+                <div className="border-t border-dashed border-gray-300 pt-4">
+                  <p className="text-xl font-extrabold text-pink-600 text-right">
+                    Preço Estimado: R$ {finalPrice.toFixed(2)}
+                  </p>
+                </div>
+                <p className="text-xs text-gray-500">
+                  * Este é um pré-agendamento. A trancista entrará em contato para confirmar a disponibilidade, data e o valor final.
+                </p>
+              </div>
+            </div>
+          );
+        default:
+          return null;
+      }
+    };
+
+    const totalSteps = 4;
+
+    return (
+      <PageContainer>
+        <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+          <h2 className="text-2xl font-bold text-gray-800 mb-6">Agendamento</h2>
+          <div className="flex justify-between items-center mb-6">
+            <span className="text-sm font-medium text-gray-500">Passo {step} de {totalSteps}</span>
+            <div className="flex space-x-2">
+              {[...Array(totalSteps)].map((_, index) => (
+                <div key={index} className={`w-6 h-1 rounded-full ${index + 1 <= step ? 'bg-pink-600' : 'bg-gray-200'}`} />
+              ))}
+            </div>
+          </div>
+          <form onSubmit={handleSubmit}>
+            {renderStepContent()}
+            <div className="flex justify-between mt-8">
+              {step > 1 && (
+                <button
+                  type="button"
+                  onClick={handlePreviousStep}
+                  className="flex items-center px-4 py-2 rounded-full border border-gray-300 text-gray-700 font-semibold transition-colors duration-200 hover:bg-gray-100"
+                >
+                  <ChevronLeft className="w-5 h-5 mr-2" /> Voltar
+                </button>
+              )}
+              {step < totalSteps && (
+                <button
+                  type="button"
+                  onClick={handleNextStep}
+                  className="flex items-center ml-auto px-4 py-2 rounded-full bg-pink-600 text-white font-semibold transition-colors duration-200 hover:bg-pink-700"
+                >
+                  Próximo <ChevronRight className="w-5 h-5 ml-2" />
+                </button>
+              )}
+              {step === totalSteps && (
+                <button
+                  type="submit"
+                  className="flex items-center ml-auto px-6 py-3 rounded-full bg-pink-600 text-white font-bold shadow-lg transition-transform duration-300 transform hover:scale-105"
+                >
+                  Confirmar Pré-agendamento
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
+      </PageContainer>
+    );
+  };
+  
+  // Página de Produtos para Clientes
+  const ClientProductsPage = () => (
+    <PageContainer>
+      <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+        <h2 className="text-2xl font-bold text-gray-800 mb-6">Nossos Serviços</h2>
+        <p className="text-gray-600 mb-8">
+          Conheça nossos tipos de tranças e encontre o estilo perfeito para você.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {products.filter(p => p.isCommercialized).map(product => (
+            <div key={product.id} className="bg-zinc-50 rounded-2xl shadow-md overflow-hidden transition-transform duration-300 transform hover:scale-105">
+              <img src={product.imageUrl} alt={product.name} className="w-full h-48 object-cover" />
+              <div className="p-4">
+                <h3 className="text-lg font-bold text-gray-800">{product.name}</h3>
+                <p className="text-sm text-gray-600 mt-1">{product.description}</p>
+                <div className="flex items-center justify-between mt-4">
+                  <span className="text-xl font-extrabold text-pink-600">R$ {calculateProductPrice(product).toFixed(2)}</span>
+                  <button
+                    onClick={() => { navigate('Appointment'); }}
+                    className="bg-pink-600 text-white font-semibold text-sm px-4 py-2 rounded-full hover:bg-pink-700"
+                  >
+                    Agendar
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </PageContainer>
+  );
+
+  // Painel do Administrador
+  const AdminDashboard = () => (
+    <PageContainer>
+      <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+        <h2 className="text-2xl font-bold text-gray-800 mb-6">Painel do Administrador</h2>
+        <p className="text-gray-600 mb-8">
+          Gerencie as configurações, produtos, estoque e agendamentos.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <AdminDashboardCard icon={Settings} title="Configurações" onClick={() => navigate('AdminConfig')} />
+          <AdminDashboardCard icon={Boxes} title="Produtos" onClick={() => navigate('AdminProducts')} />
+          <AdminDashboardCard icon={Package} title="Estoque" onClick={() => navigate('AdminStock')} />
+          <AdminDashboardCard icon={Calendar} title="Agendamentos" onClick={() => navigate('AdminAppointments')} />
+        </div>
+        <div className="mt-8">
+          <h3 className="text-xl font-bold text-gray-800 mb-4 flex items-center"><AreaChart className="w-6 h-6 mr-2" /> Análise de Lucro e Agendamentos</h3>
+          <div className="bg-zinc-100 rounded-2xl p-6">
+            <p className="text-gray-600">
+              Aqui você pode ver gráficos e análises de agendamentos e lucros. Esta é uma funcionalidade avançada que pode ser implementada em uma próxima versão.
+            </p>
+          </div>
+        </div>
+      </div>
+    </PageContainer>
+  );
+  
+  // Cartão do painel de administração
+  const AdminDashboardCard = ({ icon: Icon, title, onClick }) => (
+    <button
+      onClick={onClick}
+      className="bg-zinc-50 p-6 rounded-3xl shadow-md transition-transform duration-300 transform hover:scale-105 text-left flex items-center space-x-4"
+    >
+      <div className="p-3 rounded-full bg-pink-100 text-pink-600">
+        <Icon className="w-8 h-8" />
+      </div>
+      <div>
+        <h3 className="text-lg font-bold text-gray-800">{title}</h3>
+        <p className="text-sm text-gray-500">Gerenciar aqui</p>
+      </div>
+    </button>
+  );
+
+  // Página de Configurações do Administrador
+  const AdminConfigPage = () => {
+    const [name, setName] = useState(estabelecimentoName);
+    const [logo, setLogo] = useState(logoUrl);
+    const [rate, setRate] = useState(hourlyRate);
+
+    const handleSave = async () => {
+      if (!db || !auth.currentUser) {
+        showMessageBox('Erro: O banco de dados não está pronto.');
+        return;
+      }
+      try {
+        const configDocRef = doc(db, `artifacts/${__app_id}/public/data/app-config/main`);
+        await setDoc(configDocRef, { name, logoUrl: logo, hourlyRate: parseFloat(rate) }, { merge: true });
+        showMessageBox('Configurações salvas com sucesso!');
+      } catch (error) {
+        console.error("Error saving config:", error);
+        showMessageBox('Ocorreu um erro ao salvar as configurações.');
+      }
+    };
+
+    return (
+      <PageContainer>
+        <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+          <BackButton onClick={() => navigate('AdminDashboard')} />
+          <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><Settings className="w-6 h-6 mr-2" /> Configurações da Empresa</h2>
+          <div className="space-y-6">
+            <div>
+              <label htmlFor="name" className="block text-sm font-medium text-gray-700">Nome do Estabelecimento</label>
+              <input type="text" id="name" value={name} onChange={(e) => setName(e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+              />
+            </div>
+            <div>
+              <label htmlFor="logo" className="block text-sm font-medium text-gray-700">URL do Logo (ex: https://dominio.com/logo.png)</label>
+              <input type="text" id="logo" value={logo} onChange={(e) => setLogo(e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+              />
+              <img src={logo} alt="Logo Preview" className="mt-4 rounded-xl shadow-md max-w-xs" />
+            </div>
+            <div>
+              <label htmlFor="hourlyRate" className="block text-sm font-medium text-gray-700">Valor da Hora (R$)</label>
+              <input type="number" id="hourlyRate" value={rate} onChange={(e) => setRate(e.target.value)}
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-pink-500 focus:ring-pink-500 transition-colors"
+              />
+            </div>
+            <button onClick={handleSave} className="bg-pink-600 text-white font-semibold py-2 px-6 rounded-full shadow-md transition-transform duration-300 transform hover:scale-105">
+              Salvar Configurações
+            </button>
+          </div>
+        </div>
+      </PageContainer>
+    );
+  };
+
+  // Página de Gerenciamento de Estoque
+  const AdminStockPage = () => {
+    const [newItem, setNewItem] = useState({ id: '', name: '', quantity: 0, unitValue: 0, unit: '', supplier: '' });
+    const [editingItem, setEditingItem] = useState(null);
+
+    const handleSaveItem = async () => {
+      if (!db || !auth.currentUser) return;
+      if (!newItem.name || newItem.quantity <= 0 || newItem.unitValue < 0) {
+        showMessageBox('Por favor, preencha todos os campos corretamente.');
+        return;
+      }
+      try {
+        if (editingItem) {
+          await updateDoc(doc(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/stock/${editingItem.id}`), {
+            name: newItem.name,
+            quantity: newItem.quantity,
+            unitValue: newItem.unitValue,
+            unit: newItem.unit,
+            supplier: newItem.supplier
+          });
+          showMessageBox('Item do estoque atualizado!');
+        } else {
+          const stockColRef = collection(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/stock`);
+          await addDoc(stockColRef, newItem);
+          showMessageBox('Item adicionado ao estoque!');
+        }
+        setNewItem({ id: '', name: '', quantity: 0, unitValue: 0, unit: '', supplier: '' });
+        setEditingItem(null);
+      } catch (error) {
+        console.error("Error saving stock item:", error);
+        showMessageBox('Erro ao salvar item no estoque.');
+      }
+    };
+
+    const handleEditItem = (item) => {
+      setEditingItem(item);
+      setNewItem(item);
+    };
+
+    const handleDeleteItem = async (itemId) => {
+      if (!db || !auth.currentUser) return;
+      try {
+        await deleteDoc(doc(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/stock/${itemId}`));
+        showMessageBox('Item removido do estoque.');
+      } catch (error) {
+        console.error("Error deleting stock item:", error);
+        showMessageBox('Erro ao remover item do estoque.');
+      }
+    };
+
+    return (
+      <PageContainer>
+        <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+          <BackButton onClick={() => navigate('AdminDashboard')} />
+          <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><Package className="w-6 h-6 mr-2" /> Gerenciar Estoque</h2>
+          <div className="bg-zinc-100 p-6 rounded-2xl mb-6">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4">{editingItem ? 'Editar Item' : 'Adicionar Novo Item'}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <input type="text" placeholder="Nome do Material (ex: Cabelo Jumbo)" value={newItem.name} onChange={(e) => setNewItem({ ...newItem, name: e.target.value })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="number" placeholder="Quantidade" value={newItem.quantity} onChange={(e) => setNewItem({ ...newItem, quantity: parseInt(e.target.value) || 0 })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="number" step="0.01" placeholder="Valor Unitário (ex: 15.00)" value={newItem.unitValue} onChange={(e) => setNewItem({ ...newItem, unitValue: parseFloat(e.target.value) || 0 })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="text" placeholder="Unidade (ex: kg, metro, unidade)" value={newItem.unit} onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })} className="rounded-full px-4 py-2 border-gray-300" />
+            </div>
+            <input type="text" placeholder="Fornecedor (opcional)" value={newItem.supplier} onChange={(e) => setNewItem({ ...newItem, supplier: e.target.value })} className="mt-4 w-full rounded-full px-4 py-2 border-gray-300" />
+            <button onClick={handleSaveItem} className="bg-pink-600 text-white font-semibold py-2 px-6 rounded-full shadow-md transition-transform duration-300 transform hover:scale-105 mt-4">
+              {editingItem ? 'Salvar Alterações' : 'Adicionar'}
+            </button>
+            {editingItem && (
+              <button onClick={() => { setEditingItem(null); setNewItem({ id: '', name: '', quantity: 0, unitValue: 0, unit: '', supplier: '' }); }} className="bg-gray-400 text-white font-semibold py-2 px-6 rounded-full shadow-md transition-transform duration-300 transform hover:scale-105 mt-4 ml-2">
+                Cancelar
+              </button>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4">Itens em Estoque</h3>
+            <table className="min-w-full bg-white rounded-xl shadow-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nome</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantidade</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valor Unitário</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unidade</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {stock.map(item => (
+                  <tr key={item.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{item.name}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.quantity}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R$ {item.unitValue.toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.unit}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                      <button onClick={() => handleEditItem(item)} className="text-pink-600 hover:text-pink-900">
+                        <Edit2 className="w-5 h-5 inline" />
+                      </button>
+                      <button onClick={() => handleDeleteItem(item.id)} className="text-red-600 hover:text-red-900">
+                        <Trash2 className="w-5 h-5 inline" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </PageContainer>
+    );
+  };
+
+  // Página de Gerenciamento de Produtos
+  const AdminProductsPage = () => {
+    const [newProduct, setNewProduct] = useState({ name: '', description: '', imageUrl: '', basePrice: 0, profitMargin: 0, averageTime: 0, materials: [], isCommercialized: false });
+    const [editingProduct, setEditingProduct] = useState(null);
+    const [materialForm, setMaterialForm] = useState({ stockId: '', quantityUsed: 0 });
+
+    const handleAddMaterial = () => {
+      const stockItem = stock.find(item => item.id === materialForm.stockId);
+      if (stockItem && materialForm.quantityUsed > 0) {
+        const materialWithDetails = {
+          stockId: stockItem.id,
+          name: stockItem.name,
+          unitValue: stockItem.unitValue,
+          quantityUsed: materialForm.quantityUsed
+        };
+        setNewProduct(prev => ({ ...prev, materials: [...prev.materials, materialWithDetails] }));
+        setMaterialForm({ stockId: '', quantityUsed: 0 });
+      } else {
+        showMessageBox('Por favor, selecione um material e uma quantidade.');
+      }
+    };
+    
+    // Helper para calcular o custo total dos materiais
+    const calculateCost = (materials) => {
+        return materials.reduce((total, mat) => total + (mat.unitValue * mat.quantityUsed), 0);
+    };
+
+    const handleSaveProduct = async () => {
+      if (!db || !auth.currentUser) return;
+      if (!newProduct.name || !newProduct.imageUrl || newProduct.averageTime <= 0) {
+        showMessageBox('Por favor, preencha o nome, URL da imagem e o tempo médio do produto.');
+        return;
+      }
+      try {
+        if (editingProduct) {
+          await updateDoc(doc(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/products/${editingProduct.id}`), {
+            ...newProduct,
+            averageTime: parseFloat(newProduct.averageTime)
+          });
+          showMessageBox('Produto atualizado com sucesso!');
+        } else {
+          const productsColRef = collection(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/products`);
+          await addDoc(productsColRef, {
+            ...newProduct,
+            averageTime: parseFloat(newProduct.averageTime)
+          });
+          showMessageBox('Produto adicionado com sucesso!');
+        }
+        setNewProduct({ name: '', description: '', imageUrl: '', basePrice: 0, profitMargin: 0, averageTime: 0, materials: [], isCommercialized: false });
+        setEditingProduct(null);
+      } catch (error) {
+        console.error("Error saving product:", error);
+        showMessageBox('Erro ao salvar o produto.');
+      }
+    };
+
+    const handleEditProduct = (product) => {
+      setEditingProduct(product);
+      setNewProduct(product);
+    };
+
+    const handleDeleteProduct = async (productId) => {
+      if (!db || !auth.currentUser) return;
+      try {
+        await deleteDoc(doc(db, `artifacts/${__app_id}/users/${auth.currentUser.uid}/products/${productId}`));
+        showMessageBox('Produto removido.');
+      } catch (error) {
+        console.error("Error deleting product:", error);
+        showMessageBox('Erro ao remover o produto.');
+      }
+    };
+
+    return (
+      <PageContainer>
+        <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+          <BackButton onClick={() => navigate('AdminDashboard')} />
+          <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><Boxes className="w-6 h-6 mr-2" /> Gerenciar Produtos</h2>
+          <div className="bg-zinc-100 p-6 rounded-2xl mb-6">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4">{editingProduct ? 'Editar Produto' : 'Adicionar Novo Produto'}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <input type="text" placeholder="Nome do Serviço (ex: Trança Box)" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="text" placeholder="URL da Imagem (ex: https://dominio.com/foto.png)" value={newProduct.imageUrl} onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="text" placeholder="Descrição" value={newProduct.description} onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="number" placeholder="Preço Base (se houver)" value={newProduct.basePrice} onChange={(e) => setNewProduct({ ...newProduct, basePrice: parseFloat(e.target.value) || 0 })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="number" placeholder="Margem de Lucro (%)" value={newProduct.profitMargin} onChange={(e) => setNewProduct({ ...newProduct, profitMargin: parseFloat(e.target.value) || 0 })} className="rounded-full px-4 py-2 border-gray-300" />
+              <input type="number" placeholder="Tempo Médio (horas)" value={newProduct.averageTime} onChange={(e) => setNewProduct({ ...newProduct, averageTime: parseFloat(e.target.value) || 0 })} className="rounded-full px-4 py-2 border-gray-300" />
+            </div>
+            <div className="mt-4 p-4 bg-white rounded-xl shadow-inner border border-gray-200">
+                <h4 className="font-semibold text-gray-700 mb-2">Materiais Utilizados</h4>
+                <div className="flex space-x-2">
+                  <select value={materialForm.stockId} onChange={(e) => setMaterialForm({ ...materialForm, stockId: e.target.value })} className="flex-1 rounded-full px-4 py-2 border-gray-300">
+                    <option value="">Selecione um material...</option>
+                    {stock.map(item => <option key={item.id} value={item.id}>{item.name} ({item.quantity} {item.unit})</option>)}
+                  </select>
+                  <input type="number" placeholder="Quantidade" value={materialForm.quantityUsed} onChange={(e) => setMaterialForm({ ...materialForm, quantityUsed: parseInt(e.target.value) || 0 })} className="w-24 rounded-full px-4 py-2 border-gray-300" />
+                  <button onClick={handleAddMaterial} className="bg-pink-600 text-white font-semibold px-4 py-2 rounded-full hover:bg-pink-700">Adicionar</button>
+                </div>
+                <ul className="mt-4 space-y-2 text-sm text-gray-600">
+                  {newProduct.materials.map((mat, index) => (
+                    <li key={index} className="flex justify-between items-center bg-gray-50 p-2 rounded-lg">
+                      <span>{mat.name} - {mat.quantityUsed} unidades</span>
+                      <span className="font-bold">R$ {(mat.unitValue * mat.quantityUsed).toFixed(2)}</span>
+                    </li>
+                  ))}
+                </ul>
+            </div>
+            <div className="mt-4">
+                <label className="flex items-center space-x-2">
+                    <input type="checkbox" checked={newProduct.isCommercialized} onChange={(e) => setNewProduct({ ...newProduct, isCommercialized: e.target.checked })} className="rounded text-pink-600 focus:ring-pink-500" />
+                    <span className="text-gray-700">Disponível para Clientes</span>
+                </label>
+            </div>
+            <p className="mt-4 font-bold text-gray-800">Custo Total dos Materiais: R$ {calculateCost(newProduct.materials).toFixed(2)}</p>
+            <p className="font-bold text-pink-600">Preço Final Estimado: R$ {calculateProductPrice(newProduct).toFixed(2)}</p>
+            <button onClick={handleSaveProduct} className="bg-pink-600 text-white font-semibold py-2 px-6 rounded-full shadow-md transition-transform duration-300 transform hover:scale-105 mt-4">
+              {editingProduct ? 'Salvar Alterações' : 'Adicionar Produto'}
+            </button>
+            {editingProduct && (
+              <button onClick={() => { setEditingProduct(null); setNewProduct({ name: '', description: '', imageUrl: '', basePrice: 0, profitMargin: 0, averageTime: 0, materials: [], isCommercialized: false }); }} className="bg-gray-400 text-white font-semibold py-2 px-6 rounded-full shadow-md transition-transform duration-300 transform hover:scale-105 mt-4 ml-2">
+                Cancelar
+              </button>
+            )}
+          </div>
+          
+          <div className="overflow-x-auto">
+            <h3 className="text-lg font-semibold text-gray-700 mb-4">Produtos Cadastrados</h3>
+            <table className="min-w-full bg-white rounded-xl shadow-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nome</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tempo Médio</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preço Estimado</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Comercializado</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {products.map(product => (
+                  <tr key={product.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{product.name}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.averageTime}h</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R$ {calculateProductPrice(product).toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.isCommercialized ? 'Sim' : 'Não'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                      <button onClick={() => handleEditProduct(product)} className="text-pink-600 hover:text-pink-900">
+                        <Edit2 className="w-5 h-5 inline" />
+                      </button>
+                      <button onClick={() => handleDeleteProduct(product.id)} className="text-red-600 hover:text-red-900">
+                        <Trash2 className="w-5 h-5 inline" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </PageContainer>
+    );
+  };
+  
+  // Página de Agendamentos do Administrador
+  const AdminAppointmentsPage = () => {
+    return (
+      <PageContainer>
+        <div className="bg-white rounded-3xl shadow-xl p-6 md:p-10">
+          <BackButton onClick={() => navigate('AdminDashboard')} />
+          <h2 className="text-2xl font-bold text-gray-800 mb-6">Agendamentos</h2>
+          {appointments.length > 0 ? (
+            <div className="space-y-6">
+              {appointments.map(appointment => (
+                <AppointmentCard key={appointment.id} appointment={appointment} getStatusStyle={getStatusStyle} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-gray-500 text-center">Nenhum agendamento encontrado.</p>
+          )}
+        </div>
+      </PageContainer>
+    );
+  };
+  
+  // Cartão de Agendamento
+  const AppointmentCard = ({ appointment, getStatusStyle }) => {
+    const desiredLengthName = desiredLengths.find(l => l.value === appointment.desiredHairLength)?.name || 'Não informado';
+    return (
+      <div className="bg-white rounded-xl shadow-md p-6 border border-gray-100">
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">{appointment.braidType}</h3>
+            <p className="text-sm text-gray-500">Valor: R$ {appointment.braidPrice.toFixed(2)}</p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusStyle(appointment.status)}`}>
+            {appointment.status}
+          </span>
+        </div>
+        <div className="border-t border-dashed border-gray-200 pt-4">
+          <ul className="text-sm text-gray-600 space-y-2">
+            <li className="flex items-center space-x-2">
+              <UserRound className="w-4 h-4 text-gray-400" />
+              <span>{appointment.name}</span>
+            </li>
+            <li className="flex items-center space-x-2">
+              <Smartphone className="w-4 h-4 text-gray-400" />
+              <span>{appointment.whatsapp}</span>
+            </li>
+            <li className="flex items-center space-x-2">
+              <Calendar className="w-4 h-4 text-gray-400" />
+              <span>{appointment.dayType === 'weekday' ? 'Dia de Semana' : 'Fim de Semana'} ({appointment.shift === 'morning' ? 'Manhã' : appointment.shift === 'afternoon' ? 'Tarde' : 'Noite'})</span>
+            </li>
+            <li className="flex items-center space-x-2">
+                <Clock className="w-4 h-4 text-gray-400" />
+                <span>Tempo Estimado: {appointment.estimatedTime}h</span>
+            </li>
+            <li className="flex items-center space-x-2">
+              <Scissors className="w-4 h-4 text-gray-400" />
+              <span>Tamanho Atual: {appointment.currentHairLength}</span>
+            </li>
+            <li className="flex items-center space-x-2">
+              <Scissors className="w-4 h-4 text-gray-400" />
+              <span>Tamanho Desejado: {desiredLengthName}</span>
+            </li>
+          </ul>
+        </div>
+        <div className="mt-6 pt-4 border-t border-gray-100 flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-2">
+          <button className="flex-1 sm:flex-none flex items-center justify-center px-4 py-2 rounded-full bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700 transition-colors">
+            <CheckCheck className="w-4 h-4 mr-2" /> Confirmar
+          </button>
+          <button className="flex-1 sm:flex-none flex items-center justify-center px-4 py-2 rounded-full border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-100 transition-colors">
+            <Ban className="w-4 h-4 mr-2" /> Cancelar
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // Componente de Caixa de Mensagem
+  const MessageBox = ({ message, onClose }) => {
+    return (
+      <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-[100]">
+        <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm mx-4 text-center">
+          <p className="text-gray-700 mb-4">{message}</p>
+          <button
+            onClick={onClose}
+            className="bg-pink-600 text-white font-semibold py-2 px-6 rounded-full hover:bg-pink-700 transition-colors"
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    );
+  };
+  
+  // Renderiza a página principal com base no estado
+  const renderPage = () => {
+    if (!user) {
+      return <LoginScreen />;
+    }
+    switch (currentPage) {
+      case 'Home':
+        return <HomeSection />;
+      case 'Appointment':
+        return <AppointmentForm />;
+      case 'AdminDashboard':
+        return <AdminDashboard />;
+      case 'AdminConfig':
+        return <AdminConfigPage />;
+      case 'AdminStock':
+        return <AdminStockPage />;
+      case 'AdminProducts':
+        return <AdminProductsPage />;
+      case 'AdminAppointments':
+        return <AdminAppointmentsPage />;
+      case 'ClientProducts':
+        return <ClientProductsPage />;
+      case 'Login':
+        return <LoginScreen />;
+      default:
+        return <HomeSection />;
+    }
+  };
+  
+  // A partir de agora, o login só acontece se o usuário clicar no botão do topo.
+  if (currentPage === 'Login' && user?.role !== 'admin') {
+      return <LoginScreen />;
+  }
+  
+  // Exibe o painel do admin se o usuário for admin, ou as páginas do cliente se não for
+  const isClientPage = ['Home', 'Appointment', 'ClientProducts'].includes(currentPage);
+  const isAdminPage = currentPage !== 'Login' && !isClientPage;
+  
+  if (user?.role === 'admin' && isAdminPage) {
+    return (
+      <div className="flex flex-col md:flex-row min-h-screen font-sans">
+        <Nav />
+        <main className="flex-1">
+          {renderPage()}
+        </main>
+        {messageBox.visible && <MessageBox message={messageBox.message} onClose={hideMessageBox} />}
+      </div>
+    );
+  }
+  
+  // Se não for admin, exibe a página principal e o nav de cliente
+  return (
+    <div className="flex flex-col md:flex-row min-h-screen font-sans">
+      <Nav />
+      <main className="flex-1">
+        {renderPage()}
+      </main>
+      {messageBox.visible && <MessageBox message={messageBox.message} onClose={hideMessageBox} />}
+    </div>
+  );
+};
+
+export default App;
